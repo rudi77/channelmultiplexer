@@ -31,8 +31,11 @@ namespace ChannelMultiplexer
 				var writeableStream = mp.CreateWriteableStream ("channel1");
 				var writeableStream2 = mp.CreateWriteableStream ("channel2");
 
-				Task.Factory.StartNew(() => WriteToStream (writeableStream, "channel1", token, "Hello from Teisendorf"));
-				Task.Factory.StartNew(() => WriteToStream (writeableStream2, "channel2", token, "Hello from Maria Alm"));
+				var t1 = Task.Factory.StartNew(() => WriteToStream (writeableStream, "channel1", token, "Hello from Teisendorf"));
+				var t2 = Task.Factory.StartNew(() => WriteToStream (writeableStream2, "channel2", token, "Hello from Maria Alm"));
+
+				t1.Wait (token);
+				t2.Wait (token);
 			}
 		}
 

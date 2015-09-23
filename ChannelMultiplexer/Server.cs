@@ -31,8 +31,11 @@ namespace ChannelMultiplexer
 				var readerStream = multiplexer.CreateReadableStream ("channel1");
 				var readerStream2 = multiplexer.CreateReadableStream ("channel2");
 
-				Task.Factory.StartNew(() => ReadFromStream( readerStream, "channel1", token ));
-				Task.Factory.StartNew(() => ReadFromStream( readerStream2, "channel2", token ));
+				var t1 = Task.Factory.StartNew(() => ReadFromStream( readerStream, "channel1", token ));
+				var t2 = Task.Factory.StartNew(() => ReadFromStream( readerStream2, "channel2", token ));
+
+				t1.Wait (token);
+				t2.Wait (token);
 
 				Console.WriteLine ("Disconnected from {0}", newclient.Address);
 				ns.Close ();
