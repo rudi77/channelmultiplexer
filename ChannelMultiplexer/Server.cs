@@ -2,6 +2,8 @@
 using System.Net;
 using System.Net.Sockets;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ChannelMultiplexer
 {
@@ -11,10 +13,7 @@ namespace ChannelMultiplexer
 		readonly IPEndPoint _ipep = new IPEndPoint(IPAddress.Any, Port);
 		readonly Socket _newsock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
-		public Server ()
-		{}
-
-		public void Start()
+		public void Start( CancellationToken token )
 		{
 			_newsock.Bind(_ipep);
 			_newsock.Listen(10);
@@ -29,20 +28,38 @@ namespace ChannelMultiplexer
 			using (var ns = new NetworkStream (client))
 			{
 				var multiplexer = new TcpMultiplexer (ns);
+				var readerStream = multiplexer.CreateReadableStream ("channel1");
+				var readerStream2 = multiplexer.CreateReadableStream ("channel2");
 
-				while (true) 
-				{
-					try 
-					{
-						data = sr.ReadLine ();
-					} catch (IOException)
-					{
-						break;
-					}
-				}
+				Task.Factory.StartNew(() => ReadFromStream( readerStream, "channel1", token ));
+				Task.Factory.StartNew(() => ReadFromStream( readerStream2, "channel2", token ));
 
 				Console.WriteLine ("Disconnected from {0}", newclient.Address);
 				ns.Close ();
+			}
+		}
+
+		private void ReadFromStream( Stream stream, string name, CancellationToken token )
+		{
+			var stringReader = new StreamReader (stream);
+
+			while (!token.IsCancellationRequested) 
+			{
+				try 
+				{
+					var output = stringReader.ReadLine();
+
+					if (string.IsNullOrEmpty(output)) continue;
+
+					Logger.InfoOut ( name + " << " + output );
+
+					if (output == "exit") 
+						break;
+				}
+				catch (IOException)
+				{
+					break;
+				}
 			}
 		}
 	}

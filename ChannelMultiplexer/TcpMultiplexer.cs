@@ -11,18 +11,22 @@ using System.Text.RegularExpressions;
 
 namespace ChannelMultiplexer
 {
+	using ReadableStreamMap = Dictionary<string, ProducerConsumerStream>;
+	using WritableStreamMap = Dictionary<string, ProducerConsumerStream>;
+
+
 	public class TcpMultiplexer
 	{
-		const int BufferSize = 0xFFFF;
+		const int BufferSize = 0x100;
 		const int AngleBrackets = 6;
 		const string HeaderPattern = "^<<<*.*>>>";
 
 		readonly NetworkStream _netStream;
 
-		readonly Dictionary<string, Tuple<Stream, byte[]>> _readableStreamMap 	= new Dictionary<string, Tuple<Stream, byte[]>> ();
-		readonly Dictionary<string, Tuple<Stream, byte[]>> _writableStreamMap 	= new Dictionary<string, Tuple<Stream, byte[]>> ();
+		readonly ReadableStreamMap _readableStreamMap = new ReadableStreamMap();
+		readonly WritableStreamMap _writableStreamMap = new WritableStreamMap();
 
-		readonly BlockingCollection<Tuple<Stream, byte[]>> _readableStreams = new BlockingCollection<Tuple<Stream, byte[]>> ();
+		readonly BlockingCollection<ProducerConsumerStream> _readableStreams = new BlockingCollection<ProducerConsumerStream> ();
 		readonly BlockingCollection<NetworkStream> _readbleNetworkStream 	= new BlockingCollection<NetworkStream> ();
 
 		readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
@@ -40,6 +44,8 @@ namespace ChannelMultiplexer
 			Task.Factory.StartNew (ConsumeNetworkStream, _tokenSource.Token);
 		}
 
+		// Returns a stream which is readable by the client and
+		// writeabel by the multiplexer
 		public Stream CreateReadableStream( string name )
 		{
 			if (string.IsNullOrWhiteSpace (name)) 
@@ -48,13 +54,9 @@ namespace ChannelMultiplexer
 			if (_readableStreamMap.ContainsKey (name)) 
 				throw new InvalidOperationException ("Key " + name + " already exists");
 
-			var buffer = new byte[BufferSize];
-			var ms = new MemoryStream (buffer, false);
+			_writableStreamMap [name] = new ProducerConsumerStream (BufferSize);
 
-			_readableStreamMap [name] = Tuple.Create ((Stream)ms, buffer);
-			_readableStreams.Add( _readableStreamMap[name] );
-
-			return ms;
+			return _writableStreamMap [name];
 		}
 
 		public Stream CreateWriteableStream( string name )
@@ -65,13 +67,10 @@ namespace ChannelMultiplexer
 			if (_readableStreamMap.ContainsKey (name)) 
 				throw new InvalidOperationException ("Key " + name + " already exists");
 
-			var buffer = new byte[BufferSize];
-			var ms = new MemoryStream (buffer, true);
-
-			_readableStreamMap [name] = Tuple.Create ((Stream)ms, buffer);
+			_readableStreamMap [name] = new ProducerConsumerStream (BufferSize);
 			_readableStreams.Add( _readableStreamMap[name] );
 
-			return ms;
+			return _readableStreamMap [name];
 		}
 
 
@@ -82,6 +81,9 @@ namespace ChannelMultiplexer
 
 			if (_readableStreamMap.ContainsKey (name)) 
 				_readableStreamMap.Remove (name);
+
+			if (_writableStreamMap.ContainsKey (name))
+				_writableStreamMap.Remove (name);
 		}
 
 		// Reads data from a certain stream, adds its own header "<<<AUniqueName>>>" and
@@ -89,33 +91,37 @@ namespace ChannelMultiplexer
 		// Finally the readable stream is back inserted into the readable stream collection. 
 		private void ConsumeReadableStreams()
 		{
+			var buffer = new byte[BufferSize];
 			while (!_tokenSource.Token.IsCancellationRequested) 
 			{
 				try 
 				{
-					var tuple = _readableStreams.Take();
+					var ms = _readableStreams.Take();
 
-					tuple.Item1
-						.ReadAsync( tuple.Item2, 0, BufferSize, _tokenSource.Token )
-						.ContinueWith( t => 
-							{
-								if (t.IsCompleted)
-								{
-									var count = t.Result;
-									var encoding = new ASCIIEncoding();
-									var text = encoding.GetString( tuple.Item2, 0, count );
-									var header = "<<<" + _readableStreamMap.FirstOrDefault( x=> x.Value == tuple).Key + ">>>";
-									// TODO: check for null key
-									var packet = Encoding.ASCII.GetBytes( header + text );
+					ms.ReadAsync( buffer, 0, BufferSize, _tokenSource.Token ).ContinueWith( t => 
+					{
+						if (!t.IsFaulted)
+						{
+							var count = t.Result;
+							var encoding = new ASCIIEncoding();
+							var text = encoding.GetString( buffer, 0, count );
+							var header = "<<<" + _readableStreamMap.FirstOrDefault( x=> x.Value == ms).Key + ">>>";
 
-									_netStream.Write( packet, 0, packet.Count() );
+							Logger.InfoOut( "Sending Packet {0}{1}", header, text);
 
-									_readableStreams.Add( tuple );
-								}});
+							// TODO: check for null key
+							var packet = Encoding.ASCII.GetBytes( header + text );
+
+							_netStream.Write( packet, 0, packet.Count() );
+							_netStream.Flush();
+
+							_readableStreams.Add( ms );
+						}
+					});
 				}
 				catch (OperationCanceledException e)
 				{
-					// TODO
+					Logger.ErrOut (e.ToString());
 				}
 			}
 		}
@@ -133,23 +139,33 @@ namespace ChannelMultiplexer
 					netStream
 						.ReadAsync( buffer, 0, BufferSize )
 						.ContinueWith( t => {
-							if (t.IsCompleted)
+							if (!t.IsFaulted)
 							{
 								var count = t.Result;
 								var encoding = new ASCIIEncoding();
 								var text = encoding.GetString( buffer, 0, count );
+
+								Logger.InfoOut( "Recv {0}", text );
+
 								var match = Regex.Match( text, HeaderPattern );
 
 								if (match.Success)
 								{
-									var streamName = match.Value.Remove(0,3).TakeWhile( c => c != '>').ToString(); // extract stream name
+									var channelNameArray = match.Value.Remove(0,3).TakeWhile( c => c != '>'); // extract stream name
+									var channelName = new string(channelNameArray.ToArray());
 
-									if (!_readableStreamMap.ContainsKey(streamName))
+									Logger.DebugOut( "ChannelName: {0}", channelName );
+
+									if (!_writableStreamMap.ContainsKey(channelName))
 										throw new InvalidDataException( "Received data for an unkown stream" );
 
-									var payload = buffer.Skip(streamName.Count() + AngleBrackets).ToArray();
+									var payload = Encoding.ASCII.GetBytes(text.Remove(0, channelName.Count() + AngleBrackets));
 
-									_readableStreamMap[streamName].Item1.WriteAsync( payload, 0, payload.Count() );
+									_writableStreamMap[channelName].WriteAsync( payload, 0, payload.Count() ).ContinueWith( ta =>
+									{
+										_writableStreamMap[channelName].Flush();
+									});
+									
 									_readbleNetworkStream.Add( netStream );
 								}
 							}
@@ -158,12 +174,12 @@ namespace ChannelMultiplexer
 				catch (OperationCanceledException e)
 				{
 					// TODO: log it
-					Console.WriteLine ( e );
+					Logger.ErrOut( e.ToString() );
 				}
 				catch (InvalidDataException ide) 
 				{
 					// TODO: log it
-					Console.WriteLine ( ide );
+					Logger.ErrOut( ide.ToString() );
 				}
 			}
 		}
