@@ -11,8 +11,8 @@ using System.Text.RegularExpressions;
 
 namespace ChannelMultiplexer
 {
-	using ReadableStreamMap = Dictionary<string, ProducerConsumerStream>;
-	using WritableStreamMap = Dictionary<string, ProducerConsumerStream>;
+	using ReadableStreamMap = Dictionary<string, Stream>;
+	using WritableStreamMap = Dictionary<string, Stream>;
 
 
 	public class TcpMultiplexer
@@ -21,18 +21,28 @@ namespace ChannelMultiplexer
 		const int AngleBrackets = 6;
 		const string HeaderPattern = "^<<<*.*>>>";
 
+		/// <summary>
+		/// The possible directions of the created stream.
+		/// </summary>
+		public enum Direction
+		{
+			In,		// Readonly stream
+			Out,	// Writeonly stream
+			InOut	// Readable and writable stream
+		}
+
 		readonly NetworkStream _netStream;
 
 		readonly ReadableStreamMap _readableStreamMap = new ReadableStreamMap();
 		readonly WritableStreamMap _writableStreamMap = new WritableStreamMap();
 
-		readonly BlockingCollection<ProducerConsumerStream> _readableStreams = new BlockingCollection<ProducerConsumerStream> ();
+		readonly BlockingCollection<Stream> _readableStreams = new BlockingCollection<Stream> ();
 		readonly BlockingCollection<NetworkStream> _readbleNetworkStream 	= new BlockingCollection<NetworkStream> ();
 
 		readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
-		readonly List<Task> _activeTasks = new List<Task> ();
+		readonly string _name;
 
-		public TcpMultiplexer ( NetworkStream netStream )
+		public TcpMultiplexer ( NetworkStream netStream, string name="" )
 		{
 			if (netStream == null)
 				throw new ArgumentNullException ("netStream");
@@ -40,18 +50,31 @@ namespace ChannelMultiplexer
 			_netStream = netStream;
 			_readbleNetworkStream.Add (_netStream);
 
+			_name = name;
+
 			Task.Factory.StartNew( ConsumeReadableStreams, _tokenSource.Token );
 			Task.Factory.StartNew (ConsumeNetworkStream, _tokenSource.Token);
 		}
 
-		// Returns a stream which is readable by the client and
-		// writeabel by the multiplexer
-		public Stream CreateReadableStream( string name )
+		public Stream CreateStream( string name, Direction direction )
 		{
-			if (string.IsNullOrWhiteSpace (name)) 
+			if (string.IsNullOrWhiteSpace (name))
 				throw new ArgumentException (name);
 
-			if (_readableStreamMap.ContainsKey (name)) 
+			switch (direction) 
+			{
+				case Direction.In: 		return CreateReadonlyStream (name);
+				case Direction.Out:		return CreateWriteonlyStream (name);
+				case Direction.InOut:	return CreateReadWriteStream (name);
+				default:				throw new NotSupportedException ("Direction does not exist");
+			}
+		}
+
+		// Returns a stream which is readable by the client and
+		// writeabel by the multiplexer
+		private Stream CreateReadonlyStream( string name )
+		{
+			if (_writableStreamMap.ContainsKey (name)) 
 				throw new InvalidOperationException ("Key " + name + " already exists");
 
 			_writableStreamMap [name] = new ProducerConsumerStream (BufferSize);
@@ -59,11 +82,8 @@ namespace ChannelMultiplexer
 			return _writableStreamMap [name];
 		}
 
-		public Stream CreateWriteableStream( string name )
+		private Stream CreateWriteonlyStream( string name )
 		{
-			if (string.IsNullOrWhiteSpace (name)) 
-				throw new ArgumentException (name);
-
 			if (_readableStreamMap.ContainsKey (name)) 
 				throw new InvalidOperationException ("Key " + name + " already exists");
 
@@ -73,6 +93,20 @@ namespace ChannelMultiplexer
 			return _readableStreamMap [name];
 		}
 
+		private Stream CreateReadWriteStream( string name )
+		{
+			if (_writableStreamMap.ContainsKey (name) || _readableStreamMap.ContainsKey (name))
+				throw new InvalidOperationException ("Key " + name + " already exists");
+
+			var rwStream = new ReadWriteStream (name, BufferSize);
+
+			_readableStreamMap [name] = rwStream.OutStream;
+			_readableStreams.Add( _readableStreamMap[name] );
+
+			_writableStreamMap [name] = rwStream.InStream;
+
+			return rwStream;
+		}
 
 		public void Close( string name )
 		{
@@ -100,6 +134,8 @@ namespace ChannelMultiplexer
 
 					ms.ReadAsync( buffer, 0, BufferSize, _tokenSource.Token ).ContinueWith( t => 
 					{
+						Logger.DebugOut( "{0} Read from ReadableStream", _name );
+
 						if (!t.IsFaulted)
 						{
 							var count = t.Result;
@@ -107,7 +143,7 @@ namespace ChannelMultiplexer
 							var text = encoding.GetString( buffer, 0, count );
 							var header = "<<<" + _readableStreamMap.FirstOrDefault( x=> x.Value == ms).Key + ">>>";
 
-							Logger.InfoOut( "Sending Packet {0}{1}", header, text);
+							Logger.InfoOut( "{0} sending Packet {1}{2}", _name, header, text);
 
 							// TODO: check for null key
 							var packet = Encoding.ASCII.GetBytes( header + text );
@@ -145,7 +181,7 @@ namespace ChannelMultiplexer
 								var encoding = new ASCIIEncoding();
 								var text = encoding.GetString( buffer, 0, count );
 
-								Logger.InfoOut( "Recv {0}", text );
+								Logger.InfoOut( "{0} recv {1}", _name, text );
 
 								var match = Regex.Match( text, HeaderPattern );
 
@@ -154,7 +190,7 @@ namespace ChannelMultiplexer
 									var channelNameArray = match.Value.Remove(0,3).TakeWhile( c => c != '>'); // extract stream name
 									var channelName = new string(channelNameArray.ToArray());
 
-									Logger.DebugOut( "ChannelName: {0}", channelName );
+									Logger.DebugOut( "{0} ChannelName: {1}", _name, channelName );
 
 									if (!_writableStreamMap.ContainsKey(channelName))
 										throw new InvalidDataException( "Received data for an unkown stream" );

@@ -27,12 +27,13 @@ namespace ChannelMultiplexer
 
 			using (var ns = new NetworkStream (client))
 			{
-				var multiplexer = new TcpMultiplexer (ns);
-				var readerStream = multiplexer.CreateReadableStream ("channel1");
-				var readerStream2 = multiplexer.CreateReadableStream ("channel2");
+				var mp = new TcpMultiplexer (ns, "MPServer");
+				var rwStream = mp.CreateStream ("rwStream", TcpMultiplexer.Direction.InOut);
 
-				var t1 = Task.Factory.StartNew(() => ReadFromStream( readerStream, "channel1", token ));
-				var t2 = Task.Factory.StartNew(() => ReadFromStream( readerStream2, "channel2", token ));
+				var t1 = Task.Factory.StartNew (() => ReadAndAck (rwStream, "rwStream", token));
+
+				var inStream = mp.CreateStream ("channel1", TcpMultiplexer.Direction.In);
+				var t2 = Task.Factory.StartNew (() => ReadFromStream (inStream, "channel1", token));
 
 				t1.Wait (token);
 				t2.Wait (token);
@@ -42,9 +43,10 @@ namespace ChannelMultiplexer
 			}
 		}
 
-		private void ReadFromStream( Stream stream, string name, CancellationToken token )
+		private void ReadAndAck( Stream stream, string name, CancellationToken token )
 		{
 			var stringReader = new StreamReader (stream);
+			var stringWriter = new StreamWriter (stream);
 
 			while (!token.IsCancellationRequested) 
 			{
@@ -54,7 +56,35 @@ namespace ChannelMultiplexer
 
 					if (string.IsNullOrEmpty(output)) continue;
 
-					Logger.InfoOut ( name + " << " + output );
+					Logger.InfoOut ( "Server " + name + " receive << " + output );
+
+					Logger.InfoOut( "Server {0} sending" + " >> Server ACK", name ); 
+					stringWriter.WriteLine( "Server ACK" );
+					stringWriter.Flush();
+
+					if (output == "exit") 
+						break;
+				}
+				catch (IOException)
+				{
+					break;
+				}
+			}
+		}
+
+		private void ReadFromStream( Stream inStream, string channel, CancellationToken token )
+		{
+			var stringReader = new StreamReader (inStream);
+
+			while (!token.IsCancellationRequested) 
+			{
+				try 
+				{
+					var output = stringReader.ReadLine();
+
+					if (string.IsNullOrEmpty(output)) continue;
+
+					Logger.InfoOut ( "Server " + channel + " receive << " + output );
 
 					if (output == "exit") 
 						break;
