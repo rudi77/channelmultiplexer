@@ -16,15 +16,15 @@ namespace ChannelMultiplexer
 			}, tokenSource.Token );
 
 
-			Thread.Sleep (1000);
-
-			var clientTask = Task.Factory.StartNew (() => {
-				var client = new Client();
-				client.Start( tokenSource.Token );
-			}, tokenSource.Token);
+//			Thread.Sleep (1000);
+//
+//			var clientTask = Task.Factory.StartNew (() => {
+//				var client = new Client();
+//				client.Start( tokenSource.Token );
+//			}, tokenSource.Token);
 
 			serverTask.Wait (tokenSource.Token);
-			clientTask.Wait (tokenSource.Token);
+			//clientTask.Wait (tokenSource.Token);
 
 			Console.WriteLine ("Press any key to exit...");
 			Console.ReadKey ();

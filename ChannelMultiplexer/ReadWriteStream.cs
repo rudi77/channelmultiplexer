@@ -29,8 +29,7 @@ namespace ChannelMultiplexer
 			_outStream = new ProducerConsumerStream (BufSize);
 		}
 
-		public ReadWriteStream ( string name, int bufSize )
-			: this(name)
+		public ReadWriteStream ( string name, int bufSize ) : this(name)
 		{
 			if (bufSize < 1)
 				throw new ArgumentException ("Buffer size must be greater 0");

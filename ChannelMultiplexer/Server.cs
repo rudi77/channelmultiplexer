@@ -9,6 +9,7 @@ namespace ChannelMultiplexer
 {
 	public class Server
 	{
+		const string CapName = @"\\.\pipe\SymbioSimCapControllerPipe";
 		const int Port = 9050;
 		readonly IPEndPoint _ipep = new IPEndPoint(IPAddress.Any, Port);
 		readonly Socket _newsock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -23,20 +24,16 @@ namespace ChannelMultiplexer
 			var client = _newsock.Accept();
 			var newclient = (IPEndPoint)client.RemoteEndPoint;
 
+
 			Console.WriteLine("Connected with {0} at port {1}", newclient.Address, newclient.Port);
 
 			using (var ns = new NetworkStream (client))
 			{
 				var mp = new TcpMultiplexer (ns, "MPServer");
-				var rwStream = mp.CreateStream ("rwStream", TcpMultiplexer.Direction.InOut);
+				var rwStream = mp.CreateStream (CapName, TcpMultiplexer.Direction.InOut);
 
-				var t1 = Task.Factory.StartNew (() => ReadAndAck (rwStream, "rwStream", token));
-
-				var inStream = mp.CreateStream ("channel1", TcpMultiplexer.Direction.In);
-				var t2 = Task.Factory.StartNew (() => ReadFromStream (inStream, "channel1", token));
-
+				var t1 = Task.Factory.StartNew (() => ReadAndAck (rwStream, CapName, token));
 				t1.Wait (token);
-				t2.Wait (token);
 
 				Console.WriteLine ("Disconnected from {0}", newclient.Address);
 				ns.Close ();
@@ -45,25 +42,19 @@ namespace ChannelMultiplexer
 
 		private void ReadAndAck( Stream stream, string name, CancellationToken token )
 		{
-			var stringReader = new StreamReader (stream);
+			var stringReader = new CapReader (stream);
 			var stringWriter = new StreamWriter (stream);
 
 			while (!token.IsCancellationRequested) 
 			{
 				try 
 				{
-					var output = stringReader.ReadLine();
-
-					if (string.IsNullOrEmpty(output)) continue;
-
-					Logger.InfoOut ( "Server " + name + " receive << " + output );
+					var command = stringReader.ReadCommand();
+					Logger.InfoOut ( command.ToString() );
 
 					Logger.InfoOut( "Server {0} sending" + " >> Server ACK", name ); 
 					stringWriter.WriteLine( "Server ACK" );
 					stringWriter.Flush();
-
-					if (output == "exit") 
-						break;
 				}
 				catch (IOException)
 				{
