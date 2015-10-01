@@ -14,10 +14,9 @@ namespace ChannelMultiplexer
 	using ReadableStreamMap = Dictionary<string, Stream>;
 	using WritableStreamMap = Dictionary<string, Stream>;
 
-
 	public class TcpMultiplexer
 	{
-		const int BufferSize = 0x100;
+		const int BufferSize = 0xFFFF;
 		const int AngleBrackets = 6;
 		const string HeaderPattern = "^<<<*.*>>>";
 

@@ -14,6 +14,7 @@ namespace ChannelMultiplexer
 		readonly IPEndPoint _ipep = new IPEndPoint(IPAddress.Any, Port);
 		readonly Socket _newsock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 
+
 		public void Start( CancellationToken token )
 		{
 			_newsock.Bind(_ipep);
@@ -29,10 +30,12 @@ namespace ChannelMultiplexer
 
 			using (var ns = new NetworkStream (client))
 			{
-				var mp = new TcpMultiplexer (ns, "MPServer");
+				var mp = new TcpMultiplexer (ns, "CAPEngine" );
+				var capService = new CapService (mp);
+
 				var rwStream = mp.CreateStream (CapName, TcpMultiplexer.Direction.InOut);
 
-				var t1 = Task.Factory.StartNew (() => ReadAndAck (rwStream, CapName, token));
+				var t1 = Task.Factory.StartNew (() => ReadAndAck (rwStream, CapName, token, capService));
 				t1.Wait (token);
 
 				Console.WriteLine ("Disconnected from {0}", newclient.Address);
@@ -40,7 +43,7 @@ namespace ChannelMultiplexer
 			}
 		}
 
-		private void ReadAndAck( Stream stream, string name, CancellationToken token )
+		private void ReadAndAck( Stream stream, string name, CancellationToken token, CapService capService )
 		{
 			var stringReader = new CapReader (stream);
 			var stringWriter = new StreamWriter (stream);
@@ -52,12 +55,15 @@ namespace ChannelMultiplexer
 					var command = stringReader.ReadCommand();
 					Logger.InfoOut ( command.ToString() );
 
-					Logger.InfoOut( "Server {0} sending" + " >> Server ACK", name ); 
-					stringWriter.WriteLine( "Server ACK" );
+					var response = capService.CreateResponse( command );
+
+					Logger.InfoOut( "Server {0} sending" + "\n>> ", response ); 
+					stringWriter.WriteLine( response );
 					stringWriter.Flush();
 				}
-				catch (IOException)
+				catch (Exception e)
 				{
+					Logger.ErrOut (e.ToString ());
 					break;
 				}
 			}

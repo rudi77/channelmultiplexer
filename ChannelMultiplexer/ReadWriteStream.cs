@@ -73,18 +73,18 @@ namespace ChannelMultiplexer
 			
 		public override int Read( byte[] buffer, int offset, int count )
 		{
-			#if LOG_DEBUG
-			var res = _inStream.Read (buffer, offset, count);
-			Logger.DebugOut ("Read from inStream, buffer {0}, offset {1}, count {2}, read {3}", buffer, offset, count, res);
-			return res;
-			#else
+//			#if LOG_DEBUG
+//			var res = _inStream.Read (buffer, offset, count);
+//			Logger.DebugOut ("Read from inStream, buffer {0}, offset {1}, count {2}, read {3}", buffer, offset, count, res);
+//			return res;
+//			#else
 			return _inStream.Read (buffer, offset, count);
-			#endif
+//			#endif
 		}
 
 		public override void Write( byte[] buffer, int offset, int count )
 		{
-			Logger.DebugOut ("Write to outStream, buffer {0}, offset {1}, count {2}", buffer, offset, count);
+//			Logger.DebugOut ("Write to outStream, buffer {0}, offset {1}, count {2}", buffer, offset, count);
 			_outStream.Write (buffer, offset, count);
 		}
 

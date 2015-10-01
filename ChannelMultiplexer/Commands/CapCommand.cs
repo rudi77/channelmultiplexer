@@ -11,11 +11,11 @@
 	}
 
 	// Scan modules
-	public class Scan : CapCommand
+	public class ScanCommand : CapCommand
 	{}
 
 	// Open a channel, one way or two way
-	public class OpenChannel : CapCommand
+	public class OpenChannelCommand : CapCommand
 	{
 		public string SerialNumberInstrument { get; set; }
 
@@ -25,7 +25,7 @@
 	}
 
 	// Close a channel
-	public class Close : CapCommand
+	public class CloseCommand : CapCommand
 	{
 		public string ChannelName { get; set; }
 	}

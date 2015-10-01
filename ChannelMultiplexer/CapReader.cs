@@ -61,7 +61,7 @@ namespace ChannelMultiplexer
 			{
 				var requestType = messageParts[1];
 
-				Func<TcpMultiplexer.Direction, OpenChannel> createChannel = direction => new OpenChannel {
+				Func<TcpMultiplexer.Direction, OpenChannelCommand> createChannel = direction => new OpenChannelCommand {
 					CommandString = request,
 					Direction = TcpMultiplexer.Direction.InOut,
 					SerialNumberInstrument = messageParts [2],
@@ -71,7 +71,7 @@ namespace ChannelMultiplexer
 				switch (requestType)
 				{
 				case "ScanModules":
-					return new Scan { CommandString = request };
+					return new ScanCommand { CommandString = request };
 				case "CommandChannel":
 					return createChannel (TcpMultiplexer.Direction.InOut);
 				case "DataChannel":
@@ -84,7 +84,7 @@ namespace ChannelMultiplexer
 			}
 			else if (messageParts [0] == "Close")
 			{
-				return new Close { CommandString = request, ChannelName = messageParts [1] };
+				return new CloseCommand { CommandString = request, ChannelName = messageParts [1] };
 			}
 			else
 			{

@@ -62,7 +62,7 @@ namespace ChannelMultiplexer
 
 			lock (CircleBuff)
 			{
-				Logger.DebugOut("Read: requested {0:N0} bytes. Available = {1:N0}.", count, ReadBytesAvailable);
+				//Logger.DebugOut("Read: requested {0:N0} bytes. Available = {1:N0}.", count, ReadBytesAvailable);
 				while (ReadBytesAvailable == 0)
 				{
 					if (IsAddingCompleted)
@@ -78,7 +78,7 @@ namespace ChannelMultiplexer
 				// If reading from Tail to the end doesn't fulfill the request,
 				// and there are still bytes available,
 				// then read from the start of the buffer.
-				Logger.DebugOut("Read: Head={0}, Tail={1}, Avail={2}", Head, Tail, ReadBytesAvailable);
+				//Logger.DebugOut("Read: Head={0}, Tail={1}, Avail={2}", Head, Tail, ReadBytesAvailable);
 
 				IncrementTail();
 				int bytesToRead;
@@ -114,8 +114,8 @@ namespace ChannelMultiplexer
 				}
 
 				TotalBytesRead += bytesRead;
-				Logger.DebugOut("Read: returning {0:N0} bytes. TotalRead={1:N0}", bytesRead, TotalBytesRead);
-				Logger.DebugOut("Read: Head={0}, Tail={1}, Avail={2}", Head, Tail, ReadBytesAvailable);
+				//Logger.DebugOut("Read: returning {0:N0} bytes. TotalRead={1:N0}", bytesRead, TotalBytesRead);
+				//Logger.DebugOut("Read: Head={0}, Tail={1}, Avail={2}", Head, Tail, ReadBytesAvailable);
 
 				Monitor.Pulse(CircleBuff);
 				return bytesRead;
@@ -134,7 +134,7 @@ namespace ChannelMultiplexer
 			}
 			lock (CircleBuff)
 			{
-				Logger.DebugOut("Write: requested {0:N0} bytes. Available = {1:N0}", count, WriteBytesAvailable);
+				//Logger.DebugOut("Write: requested {0:N0} bytes. Available = {1:N0}", count, WriteBytesAvailable);
 				int bytesWritten = 0;
 				while (bytesWritten < count)
 				{
@@ -143,13 +143,13 @@ namespace ChannelMultiplexer
 						Monitor.Wait(CircleBuff);
 					}
 
-					Logger.DebugOut("Write: Head={0}, Tail={1}, Avail={2}", Head, Tail, WriteBytesAvailable);
+					//Logger.DebugOut("Write: Head={0}, Tail={1}, Avail={2}", Head, Tail, WriteBytesAvailable);
 					int bytesToCopy = Math.Min((count - bytesWritten), WriteBytesAvailable);
 					CopyBytes(buffer, offset + bytesWritten, bytesToCopy);
 					TotalBytesWritten += bytesToCopy;
 
-					Logger.DebugOut("Write: {0} bytes written. TotalWritten={1:N0}", bytesToCopy, TotalBytesWritten);
-					Logger.DebugOut("Write: Head={0}, Tail={1}, Avail={2}", Head, Tail, WriteBytesAvailable);
+					//Logger.DebugOut("Write: {0} bytes written. TotalWritten={1:N0}", bytesToCopy, TotalBytesWritten);
+					//Logger.DebugOut("Write: Head={0}, Tail={1}, Avail={2}", Head, Tail, WriteBytesAvailable);
 
 					bytesWritten += bytesToCopy;
 					Monitor.Pulse(CircleBuff);
