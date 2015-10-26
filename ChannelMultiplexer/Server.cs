@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Tecan.At.Dragonfly.Communication.Generic.Simulator;
 
 namespace ChannelMultiplexer
 {
@@ -13,7 +14,6 @@ namespace ChannelMultiplexer
 		const int Port = 9050;
 		readonly IPEndPoint _ipep = new IPEndPoint(IPAddress.Any, Port);
 		readonly Socket _newsock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
 
 		public void Start( CancellationToken token )
 		{
@@ -30,7 +30,7 @@ namespace ChannelMultiplexer
 
 			using (var ns = new NetworkStream (client))
 			{
-				var mp = new TcpMultiplexer (ns, "CAPEngine" );
+				var mp = new TcpMultiplexer ();
 				var capService = new CapService (mp);
 
 				var rwStream = mp.CreateStream (CapName, TcpMultiplexer.Direction.InOut);

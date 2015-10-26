@@ -5,106 +5,68 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using System.Threading;
-using System.Text;
 using System.Linq;
-using System.Text.RegularExpressions;
+using System.Net;
+using ChannelMultiplexer;
 
 namespace ChannelMultiplexer
 {
 	using ReadableStreamMap = Dictionary<string, Stream>;
 	using WritableStreamMap = Dictionary<string, Stream>;
 
-	public class TcpMultiplexer
+	/// <summary>
+	/// The possible directions of the created stream.
+	/// </summary>
+	public enum Direction
+	{
+		In,		// Readonly stream
+		Out,	// Writeonly stream
+		InOut	// Readable and writable stream
+	}
+
+	public interface IMultiplexing
+	{
+		Stream Create( string name, Direction direction );
+
+		void Close( string name );
+
+		bool Run();
+		bool Run( NetworkStream stream );
+
+		void Stop();
+	}
+
+	public class TcpMultiplexer : IMultiplexing
 	{
 		const int BufferSize = 0xFFFF;
-		const int AngleBrackets = 6;
-		const string HeaderPattern = "^<<<*.*>>>";
 
-		/// <summary>
-		/// The possible directions of the created stream.
-		/// </summary>
-		public enum Direction
-		{
-			In,		// Readonly stream
-			Out,	// Writeonly stream
-			InOut	// Readable and writable stream
-		}
-
-		readonly NetworkStream _netStream;
-
+		readonly object _rootLock = new object ();
 		readonly ReadableStreamMap _readableStreamMap = new ReadableStreamMap();
 		readonly WritableStreamMap _writableStreamMap = new WritableStreamMap();
-
 		readonly BlockingCollection<Stream> _readableStreams = new BlockingCollection<Stream> ();
-		readonly BlockingCollection<NetworkStream> _readbleNetworkStream 	= new BlockingCollection<NetworkStream> ();
-
 		readonly CancellationTokenSource _tokenSource = new CancellationTokenSource();
-		readonly string _name;
 
-		public TcpMultiplexer ( NetworkStream netStream, string name="" )
-		{
-			if (netStream == null)
-				throw new ArgumentNullException ("netStream");
+		NetworkStream 	_netStream;
+		IPEndPoint 		_ipep;
+		Socket 			_server;
 
-			_netStream = netStream;
-			_readbleNetworkStream.Add (_netStream);
+		TcpMultiplexerWriter _tcpFrameWriter;
+		TcpMultiplexerReader _tcpFrameReader;
 
-			_name = name;
-
-			Task.Factory.StartNew( ConsumeReadableStreams, _tokenSource.Token );
-			Task.Factory.StartNew (ConsumeNetworkStream, _tokenSource.Token);
-		}
-
-		public Stream CreateStream( string name, Direction direction )
+		public Stream Create( string name, Direction direction )
 		{
 			if (string.IsNullOrWhiteSpace (name))
 				throw new ArgumentException (name);
 
+			Logger.InfoOut ("TcpMultiplexer create stream {0}, {1}", name, direction);
+
 			switch (direction) 
 			{
-				case Direction.In: 		return CreateReadonlyStream (name);
-				case Direction.Out:		return CreateWriteonlyStream (name);
-				case Direction.InOut:	return CreateReadWriteStream (name);
-				default:				throw new NotSupportedException ("Direction does not exist");
+			case Direction.In: 		return CreateReadonlyStream (name);
+			case Direction.Out:		return CreateWriteonlyStream (name);
+			case Direction.InOut:	return CreateReadWriteStream (name);
+			default:				throw new NotSupportedException ("Direction does not exist");
 			}
-		}
-
-		// Returns a stream which is readable by the client and
-		// writeabel by the multiplexer
-		private Stream CreateReadonlyStream( string name )
-		{
-			if (_writableStreamMap.ContainsKey (name)) 
-				throw new InvalidOperationException ("Key " + name + " already exists");
-
-			_writableStreamMap [name] = new ProducerConsumerStream (BufferSize);
-
-			return _writableStreamMap [name];
-		}
-
-		private Stream CreateWriteonlyStream( string name )
-		{
-			if (_readableStreamMap.ContainsKey (name)) 
-				throw new InvalidOperationException ("Key " + name + " already exists");
-
-			_readableStreamMap [name] = new ProducerConsumerStream (BufferSize);
-			_readableStreams.Add( _readableStreamMap[name] );
-
-			return _readableStreamMap [name];
-		}
-
-		private Stream CreateReadWriteStream( string name )
-		{
-			if (_writableStreamMap.ContainsKey (name) || _readableStreamMap.ContainsKey (name))
-				throw new InvalidOperationException ("Key " + name + " already exists");
-
-			var rwStream = new ReadWriteStream (name, BufferSize);
-
-			_readableStreamMap [name] = rwStream.OutStream;
-			_readableStreams.Add( _readableStreamMap[name] );
-
-			_writableStreamMap [name] = rwStream.InStream;
-
-			return rwStream;
 		}
 
 		public void Close( string name )
@@ -119,105 +81,168 @@ namespace ChannelMultiplexer
 				_writableStreamMap.Remove (name);
 		}
 
+		/// <summary>
+		/// Run this instance. Tries to create a TCP connection to the simulator.
+		/// If this fails False will be returned otherwise true;
+		/// </summary>
+		public bool Run()
+		{
+			try
+			{
+				_ipep 	= new IPEndPoint(IPAddress.Parse("127.0.0.1"), 9050);
+				_server = new Socket(AddressFamily.InterNetwork,SocketType.Stream, ProtocolType.Tcp);
+				_server.Connect( _ipep );
+			}
+			catch (SocketException e) {
+				Logger.ErrOut (e.ToString());
+				return false;
+			}
+
+			Run( new NetworkStream (_server) );
+
+			return true;
+		}
+
+		public bool Run( NetworkStream stream )
+		{
+			if (stream == null)
+				throw new ArgumentNullException ("stream");
+
+			_netStream = stream;
+			_tcpFrameWriter = new TcpMultiplexerWriter (_netStream, _logger);
+			_tcpFrameReader = new TcpMultiplexerReader (_netStream, _logger);
+
+			Task.Factory.StartNew( ConsumeReadableStreams, _tokenSource.Token );
+			Task.Factory.StartNew (ConsumeNetworkStream, _tokenSource.Token);
+
+			return true;
+		}
+
+		public void Stop()
+		{
+			_tokenSource.Cancel ();
+			_netStream.Dispose ();
+
+			// TODO: Clear all Maps, Arrays etc.
+		}
+
+		#region Private Methods
+		// Returns a stream which is readable by the client and writable by the multiplexer
+		Stream CreateReadonlyStream( string name )
+		{
+			if (_writableStreamMap.ContainsKey (name)) 
+				throw new InvalidOperationException ("Key " + name + " already exists");
+
+			_writableStreamMap [name] = new ProducerConsumerStream (BufferSize);
+
+			Logger.DebugOut ("TcpMultiplexer create ReadonlyStream {0}", name);
+
+			return _writableStreamMap [name];
+		}
+
+		Stream CreateWriteonlyStream( string name )
+		{
+			if (_readableStreamMap.ContainsKey (name)) 
+				throw new InvalidOperationException ("Key " + name + " already exists");
+
+			_readableStreamMap [name] = new ProducerConsumerStream (BufferSize);
+			_readableStreams.Add( _readableStreamMap[name] );
+
+			Logger.DebugOut ("TcpMultiplexer create WriteStream {0}", name);
+
+			return _readableStreamMap [name];
+		}
+
+		Stream CreateReadWriteStream( string name )
+		{
+			if (_writableStreamMap.ContainsKey (name) || _readableStreamMap.ContainsKey (name))
+				throw new InvalidOperationException ("Key " + name + " already exists");
+
+			var rwStream = new ReadWriteStream (name, BufferSize);
+
+			_readableStreamMap [name] = rwStream.OutStream;
+			_readableStreams.Add( _readableStreamMap[name] );
+
+			Logger.DebugOut ("TcpMultiplexer create ReadWriteStream {0}", name);
+
+			_writableStreamMap [name] = rwStream.InStream;
+
+			return rwStream;
+		}
+
 		// Reads data from a certain stream, adds its own header "<<<AUniqueName>>>" and
 		// sends it over the NetworkStream to its counter part.
 		// Finally the readable stream is back inserted into the readable stream collection. 
-		private void ConsumeReadableStreams()
+		void ConsumeReadableStreams()
 		{
 			var buffer = new byte[BufferSize];
+
 			while (!_tokenSource.Token.IsCancellationRequested) 
 			{
 				try 
 				{
 					var ms = _readableStreams.Take();
 
+					Logger.DebugOut( "TcpMultiplexer taken a readableStream" );
+
 					ms.ReadAsync( buffer, 0, BufferSize, _tokenSource.Token ).ContinueWith( t => 
-					{
-						Logger.DebugOut( "{0} Read from ReadableStream", _name );
-
-						if (!t.IsFaulted)
 						{
-							var count = t.Result;
-							var encoding = new ASCIIEncoding();
-							var text = encoding.GetString( buffer, 0, count );
-							var header = "<<<" + _readableStreamMap.FirstOrDefault( x=> x.Value == ms).Key + ">>>";
-
-							Logger.InfoOut( "{0} sending Packet {1}{2}", _name, header, text);
-
-							// TODO: check for null key
-							var packet = Encoding.ASCII.GetBytes( header + text );
-
-							_netStream.Write( packet, 0, packet.Count() );
-							_netStream.Flush();
-
-							_readableStreams.Add( ms );
-						}
-					});
-				}
-				catch (OperationCanceledException e)
-				{
-					Logger.ErrOut (e.ToString());
-				}
-			}
-		}
-
-		private void ConsumeNetworkStream()
-		{
-			var buffer = new byte[BufferSize];
-
-			while (!_tokenSource.Token.IsCancellationRequested) 
-			{
-				try 
-				{
-					var netStream = _readbleNetworkStream.Take();
-
-					netStream
-						.ReadAsync( buffer, 0, BufferSize )
-						.ContinueWith( t => {
 							if (!t.IsFaulted)
 							{
-								var count = t.Result;
-								var encoding = new ASCIIEncoding();
-								var text = encoding.GetString( buffer, 0, count );
+								var payload = buffer.Take( t.Result ).ToArray();
 
-								Logger.InfoOut( "{0} recv {1}", _name, text );
+								Logger.DebugOut( "TcpMultiplexer writing to TCP: [PayloadLength:{0} | Payload: {1}]", 
+									t.Result, 
+									BitConverter.ToString(payload).Replace( "-", " ") );
 
-								var match = Regex.Match( text, HeaderPattern );
+								_tcpFrameWriter.WriteAsync( payload, _readableStreamMap.FirstOrDefault( x=> x.Value == ms).Key );
 
-								if (match.Success)
-								{
-									var channelNameArray = match.Value.Remove(0,3).TakeWhile( c => c != '>'); // extract stream name
-									var channelName = new string(channelNameArray.ToArray());
+								_readableStreams.Add( ms );
 
-									Logger.DebugOut( "{0} ChannelName: {1}", _name, channelName );
-
-									if (!_writableStreamMap.ContainsKey(channelName))
-										throw new InvalidDataException( "Received data for an unkown stream" );
-
-									var payload = Encoding.ASCII.GetBytes(text.Remove(0, channelName.Count() + AngleBrackets));
-
-									_writableStreamMap[channelName].WriteAsync( payload, 0, payload.Count() ).ContinueWith( ta =>
-									{
-										_writableStreamMap[channelName].Flush();
-									});
-									
-									_readbleNetworkStream.Add( netStream );
-								}
+								Logger.DebugOut( "TcpMultiplexer written to TCP: [PayloadLength:{0} | Payload: {1}]", 
+									t.Result, 
+									BitConverter.ToString(payload).Replace( "-", " ") );
 							}
 						});
 				}
 				catch (OperationCanceledException e)
 				{
-					// TODO: log it
+					Logger.ErrOut(e.ToString());
+				}
+			}
+		}
+
+		void ConsumeNetworkStream()
+		{
+			while (!_tokenSource.Token.IsCancellationRequested) 
+			{
+				try 
+				{
+					var frame = _tcpFrameReader.Read();
+
+					Logger.DebugOut( "TcpMultiplexer read frame {0}", frame );
+
+					// TODO: Check if there is a stream for frame.ChannelName
+
+					_writableStreamMap[frame.ChannelName]
+						.WriteAsync( frame.Payload, 0, frame.PayloadLength )
+						.ContinueWith( t =>
+							{
+								_writableStreamMap[frame.ChannelName].Flush();
+								Logger.DebugOut( "TcpMultiplexer read and written frame {0} to {1}", frame, frame.ChannelName );
+							});
+				}
+				catch (OperationCanceledException e)
+				{
 					Logger.ErrOut( e.ToString() );
 				}
 				catch (InvalidDataException ide) 
 				{
-					// TODO: log it
 					Logger.ErrOut( ide.ToString() );
 				}
 			}
 		}
+		#endregion Private Methods
 	}
 }
 

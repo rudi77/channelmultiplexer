@@ -1,7 +1,8 @@
 ﻿using System;
 using System.IO;
+using ChannelMultiplexer;
 
-namespace ChannelMultiplexer
+namespace Tecan.At.Dragonfly.Communication.Generic.Simulator
 {
 	/// <summary>
 	/// Read write stream.
@@ -57,7 +58,6 @@ namespace ChannelMultiplexer
 
 		public override void Flush()
 		{
-			Logger.DebugOut ("Flush outStream");
 			_outStream.Flush ();
 		}
 
@@ -70,21 +70,14 @@ namespace ChannelMultiplexer
 		{
 			throw new NotImplementedException ();
 		}
-			
+
 		public override int Read( byte[] buffer, int offset, int count )
 		{
-//			#if LOG_DEBUG
-//			var res = _inStream.Read (buffer, offset, count);
-//			Logger.DebugOut ("Read from inStream, buffer {0}, offset {1}, count {2}, read {3}", buffer, offset, count, res);
-//			return res;
-//			#else
 			return _inStream.Read (buffer, offset, count);
-//			#endif
 		}
 
 		public override void Write( byte[] buffer, int offset, int count )
 		{
-//			Logger.DebugOut ("Write to outStream, buffer {0}, offset {1}, count {2}", buffer, offset, count);
 			_outStream.Write (buffer, offset, count);
 		}
 
